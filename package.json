@@ -1,8 +1,8 @@
 {
   "name": "@erwinverdonk/aws-cfn-wait",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "",
-  "main": "./index",
+  "main": "./dist/index.js",
   "typings": "./index",
   "scripts": {
     "build": "tsc -p ./tsconfig.json"
@@ -11,9 +11,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^9.6.5",
-    "typescript": "^2.8.1"
-  },
-  "dependencies": {
+    "typescript": "^2.8.1",
     "aws-sdk": "^2.215.1"
   }
 }
