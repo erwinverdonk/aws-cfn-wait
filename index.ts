@@ -304,7 +304,7 @@ export const AwsCfnWait = {
           } else {
             // Because we are in a waiting state, we can go to the result handler
             // immediately.
-            getResultHandler(event.WaitProperties.responseData, cr);
+            getResultHandler(responseReceiver, cr)(event.WaitProperties.responseData);
           }
         });
     };
