@@ -160,7 +160,7 @@ exports.AwsCfnWait = {
                         .catch(getErrorHandler(responseReceiver)));
                 }
                 else {
-                    getResultHandler(event.WaitProperties.responseData, cr);
+                    getResultHandler(responseReceiver, cr)(event.WaitProperties.responseData);
                 }
             });
         };
