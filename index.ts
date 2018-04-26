@@ -2,6 +2,8 @@ import * as HTTPS from 'https';
 import * as URL from 'url';
 import * as AWS from 'aws-sdk';
 
+const uuid = require('uuid/v4');
+
 type Callback = (error?:any, result?:any) => void;
 
 type ResponseBody = {
@@ -49,10 +51,7 @@ type CreateParams = {
 
 type ResultHandlerReturn = {
   canFinish: boolean,
-  result?: any,
-  error?: {
-    message: string
-  }
+  result?: any
 }
 
 export const AwsCfnWait = {
@@ -82,11 +81,14 @@ export const AwsCfnWait = {
         
         // Determine what to use as PhysicalResourceId for the custom resource.
         // When no PhysicalResourceId is provided in the data object, we use
-        // the PhysicalResourceId from the event when available or the RequestId.
+        // the PhysicalResourceId from the event when available, the RequestId,
+        // or a uuid.
         responseBody.PhysicalResourceId = (
           {...data}.PhysicalResourceId || 
           event.PhysicalResourceId || 
-          event.RequestId
+          event.RequestId ||
+          responseBody.RequestId ||
+          uuid()
         );
         responseBody.Data = error || data;
         responseBody.Status = error ? 'FAILED' : 'SUCCESS';
@@ -188,7 +190,7 @@ export const AwsCfnWait = {
           .then((_:any) => {
             return new Promise((
               resolve:(data: ResultHandlerReturn) => void, 
-              reject:(data: ResultHandlerReturn) => void
+              reject:(error: any) => void
             ) => {
               console.log('Wait result:', JSON.stringify(_));
   
@@ -230,13 +232,10 @@ export const AwsCfnWait = {
                     })
                     .promise()
                     .then(_ => resolve({canFinish: false, result: _}))
-                    .catch(_ => reject({canFinish: true, error: _}));
+                    .catch(_ => reject(_));
                   } else {
                     reject({
-                      canFinish: true,
-                      error: {
-                        message: 'Response URL has expired. Waiting canceled!'
-                      }
+                      message: 'Response URL has expired. Waiting canceled!'
                     });
                   }
                 }, waitDelay);
@@ -253,11 +252,7 @@ export const AwsCfnWait = {
             }
           })
           .catch((_:any) => {
-            if(_.canFinish){
-              responseReceiver.finish(_.error, null);
-            } else {
-              responseReceiver.callback(_.error, null);
-            }
+            responseReceiver.finish(_, null);
           });
       };
   
