@@ -283,25 +283,24 @@ export const AwsCfnWait = {
   
       // Instantiate the custom resource and determine whether to handle the 
       // request as a custom resource request typo or a wait call.
-      CustomResource.create(event, context)
-        .then((cr:any) => {
-          // Check whether we are in waiting state
-          if(!event.WaitProperties){
-            cr.customResource()
-              // Retrieve method matching request type
-              .then((requestMethods:any) => requestMethods[event.RequestType.toLowerCase()])
-              // Call the method
-              .then((requestMethod:any) => requestMethod()
-                // Handle the responses
-                .then(getResultHandler(responseReceiver, cr))
-                .catch(getErrorHandler(responseReceiver))
-              );
-          } else {
-            // Because we are in a waiting state, we can go to the result handler
-            // immediately.
-            getResultHandler(responseReceiver, cr)(event.WaitProperties.responseData);
-          }
-        });
+      const cr = CustomResource.create(event, context);
+      
+      // Check whether we are in waiting state
+      if(!event.WaitProperties){
+        cr.customResource()
+          // Retrieve method matching request type
+          .then((requestMethods:any) => requestMethods[event.RequestType.toLowerCase()])
+          // Call the method
+          .then((requestMethod:any) => requestMethod()
+            // Handle the responses
+            .then(getResultHandler(responseReceiver, cr))
+            .catch(getErrorHandler(responseReceiver))
+          );
+      } else {
+        // Because we are in a waiting state, we can go to the result handler
+        // immediately.
+        getResultHandler(responseReceiver, cr)(event.WaitProperties.responseData);
+      }
     };
   
     // In case of a wait call the event is a string and should be parsed.
