@@ -41,8 +41,24 @@ type Event = {
   RequestType: 'Create' | 'Update' | 'Delete'
 }
 
+type RequestTypeMethods = 'create'|'update'|'delete';
+
+type CustomResourceConstructor = {
+  create: (event:any, context:any) => Promise<CustomResourceInstance>
+}
+
+type CustomResourceInstance = {
+  customResource: () => Promise<{
+    [K in RequestTypeMethods]: () => Promise<any>
+  }>,
+  wait: (result:any) => Promise<{
+    shouldWait: boolean,
+    result?: any
+  }>
+};
+
 type CreateParams = {
-  CustomResource:any, 
+  CustomResource: CustomResourceConstructor, 
   waitDelay?:any, 
   event:any, 
   context:any, 
@@ -56,7 +72,7 @@ type ResultHandlerReturn = {
 
 export const AwsCfnWait = {
   /**
-   * The method 'create' instantiates the custom resource and the wait logic.
+   * Instantiates the custom resource and the wait logic.
    */
   create: ({
     CustomResource, 
@@ -65,7 +81,10 @@ export const AwsCfnWait = {
     context, 
     callback
   }: CreateParams) => {
-    const init = (event: Event) => {
+    /**
+     * Initializes the instance with a valid event object.
+     */
+    const init =async (event: Event) => {
       type ResponseReceiver = ReturnType<typeof getResponseReceiver>;
   
       /**
@@ -107,6 +126,8 @@ export const AwsCfnWait = {
         request.on('error', _ => callback(_, null));
         request.write(responseBodyStr);
         request.end();
+
+        return responseBody;
       };
   
       /**
@@ -173,30 +194,32 @@ export const AwsCfnWait = {
        */
       const getResultHandler = (
         responseReceiver: ResponseReceiver, 
-        customResource:any
-      ) => (result:any) => {
+        customResource: CustomResourceInstance
+      ) => (result:any):void => {
         if(result){
           console.log('success', JSON.stringify(result));
         }
   
         // When the custom resource request type is 'Delete' we do not proceed
         // to the wait logic but finish immediately.
-        if(event.RequestType === 'Delete'){
-          return responseReceiver.finish();
-        }
+        // TODO: See if this is needed or we can also wait for delete complete
+        // if(event.RequestType === 'Delete'){
+        //   responseReceiver.finish();
+        //   return;
+        // }
   
         // Decide whether to wait or finish the custom resource process.
-        return customResource.wait(result)
-          .then((_:any) => {
+        customResource.wait(result)
+          .then(waitResult => {
             return new Promise((
               resolve:(data: ResultHandlerReturn) => void, 
               reject:(error: any) => void
             ) => {
-              console.log('Wait result:', JSON.stringify(_));
+              console.log('Wait result:', JSON.stringify(waitResult));
   
               // We should wait for the next recursion to decide whether the state
               // has become valid.
-              if(_.shouldWait){
+              if(waitResult.shouldWait){
                 console.log('We are not yet done waiting, lets wait some more...')
                 console.log(`Rechecking status in ${waitDelay} milliseconds`);
   
@@ -223,6 +246,7 @@ export const AwsCfnWait = {
                       FunctionName: context.invokedFunctionArn,
                       InvocationType: 'Event',
                       Payload: JSON.stringify({
+                        RequestType: event.RequestType,
                         ResourceProperties: event.ResourceProperties,
                         WaitProperties: event.WaitProperties || {
                           responseData: result,
@@ -237,23 +261,26 @@ export const AwsCfnWait = {
                     reject({
                       message: 'Response URL has expired. Waiting canceled!'
                     });
+                    
                   }
                 }, waitDelay);
               } else {
-                resolve({ canFinish: true, result: _.result });
+                resolve({ canFinish: true, result: waitResult.result });
               }
             });
           })
-          .then((_:any) => {
+          .then(_ => {
             if(_.canFinish){
               responseReceiver.finish(null, _.result);
             } else {
               responseReceiver.callback(null, _.result);
             }
           })
-          .catch((_:any) => {
+          .catch(_ => {
             responseReceiver.finish(_, null);
           });
+
+          return result;
       };
   
       /**
@@ -262,7 +289,9 @@ export const AwsCfnWait = {
        */
       const getErrorHandler = (responseReceiver: ResponseReceiver) => (_:any) => {
         console.error('failed', JSON.stringify(_, Object.getOwnPropertyNames(_)));
-        responseReceiver.callback({error: _}, null);
+        responseReceiver.finish({error: _}, null);
+
+        return _;
       };
   
        // The response receiver object to use for both result and error handling.
@@ -283,27 +312,36 @@ export const AwsCfnWait = {
   
       // Instantiate the custom resource and determine whether to handle the 
       // request as a custom resource request typo or a wait call.
-      const cr = CustomResource.create(event, context);
+      const cr = await CustomResource.create(event, context);
       
+      // Create result and error handler
+      const resultHandler = getResultHandler(responseReceiver, cr);
+      const errorHandler = getErrorHandler(responseReceiver);
+
       // Check whether we are in waiting state
       if(!event.WaitProperties){
-        cr.customResource()
+        return cr.customResource()
           // Retrieve method matching request type
-          .then((requestMethods:any) => requestMethods[event.RequestType.toLowerCase()])
+          .then(requestMethods => requestMethods[
+            event.RequestType.toLowerCase() as RequestTypeMethods
+          ])
           // Call the method
-          .then((requestMethod:any) => requestMethod()
-            // Handle the responses
-            .then(getResultHandler(responseReceiver, cr))
-            .catch(getErrorHandler(responseReceiver))
-          );
+          .then(requestMethod => requestMethod())
+          // Handle result
+          .then(resultHandler)
+          // Handle error
+          .catch(errorHandler);
       } else {
         // Because we are in a waiting state, we can go to the result handler
         // immediately.
-        getResultHandler(responseReceiver, cr)(event.WaitProperties.responseData);
+        resultHandler(event.WaitProperties.responseData);
+
+        // Resolve with the result
+        return Promise.resolve(event.WaitProperties.responseData)
       }
     };
   
     // In case of a wait call the event is a string and should be parsed.
-    init(typeof event === 'string' ? JSON.parse(event) : event);
+    return init(typeof event === 'string' ? JSON.parse(event) : event);
   }
 };

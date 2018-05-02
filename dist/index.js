@@ -1,16 +1,27 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : new P(function (resolve) { resolve(result.value); }).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const HTTPS = require("https");
 const URL = require("url");
 const AWS = require("aws-sdk");
+const uuid = require('uuid/v4');
 exports.AwsCfnWait = {
     create: ({ CustomResource, waitDelay = 60000, event, context, callback }) => {
-        const init = (event) => {
+        const init = (event) => __awaiter(this, void 0, void 0, function* () {
             const finish = (options, responseBody, callback) => (error, data) => {
                 console.log('Finish');
                 responseBody.PhysicalResourceId = (Object.assign({}, data).PhysicalResourceId ||
                     event.PhysicalResourceId ||
-                    event.RequestId);
+                    event.RequestId ||
+                    responseBody.RequestId ||
+                    uuid());
                 responseBody.Data = error || data;
                 responseBody.Status = error ? 'FAILED' : 'SUCCESS';
                 const responseBodyStr = JSON.stringify(responseBody);
@@ -21,6 +32,7 @@ exports.AwsCfnWait = {
                 request.on('error', _ => callback(_, null));
                 request.write(responseBodyStr);
                 request.end();
+                return responseBody;
             };
             const getResponseReceiver = (callback) => {
                 if (!event.WaitProperties) {
@@ -71,14 +83,11 @@ exports.AwsCfnWait = {
                 if (result) {
                     console.log('success', JSON.stringify(result));
                 }
-                if (event.RequestType === 'Delete') {
-                    return responseReceiver.finish();
-                }
-                return customResource.wait(result)
-                    .then((_) => {
+                customResource.wait(result)
+                    .then(waitResult => {
                     return new Promise((resolve, reject) => {
-                        console.log('Wait result:', JSON.stringify(_));
-                        if (_.shouldWait) {
+                        console.log('Wait result:', JSON.stringify(waitResult));
+                        if (waitResult.shouldWait) {
                             console.log('We are not yet done waiting, lets wait some more...');
                             console.log(`Rechecking status in ${waitDelay} milliseconds`);
                             setTimeout(() => {
@@ -92,6 +101,7 @@ exports.AwsCfnWait = {
                                         FunctionName: context.invokedFunctionArn,
                                         InvocationType: 'Event',
                                         Payload: JSON.stringify({
+                                            RequestType: event.RequestType,
                                             ResourceProperties: event.ResourceProperties,
                                             WaitProperties: event.WaitProperties || {
                                                 responseData: result,
@@ -101,24 +111,21 @@ exports.AwsCfnWait = {
                                     })
                                         .promise()
                                         .then(_ => resolve({ canFinish: false, result: _ }))
-                                        .catch(_ => reject({ canFinish: true, error: _ }));
+                                        .catch(_ => reject(_));
                                 }
                                 else {
                                     reject({
-                                        canFinish: true,
-                                        error: {
-                                            message: 'Response URL has expired. Waiting canceled!'
-                                        }
+                                        message: 'Response URL has expired. Waiting canceled!'
                                     });
                                 }
                             }, waitDelay);
                         }
                         else {
-                            resolve({ canFinish: true, result: _.result });
+                            resolve({ canFinish: true, result: waitResult.result });
                         }
                     });
                 })
-                    .then((_) => {
+                    .then(_ => {
                     if (_.canFinish) {
                         responseReceiver.finish(null, _.result);
                     }
@@ -126,18 +133,15 @@ exports.AwsCfnWait = {
                         responseReceiver.callback(null, _.result);
                     }
                 })
-                    .catch((_) => {
-                    if (_.canFinish) {
-                        responseReceiver.finish(_.error, null);
-                    }
-                    else {
-                        responseReceiver.callback(_.error, null);
-                    }
+                    .catch(_ => {
+                    responseReceiver.finish(_, null);
                 });
+                return result;
             };
             const getErrorHandler = (responseReceiver) => (_) => {
                 console.error('failed', JSON.stringify(_, Object.getOwnPropertyNames(_)));
-                responseReceiver.callback({ error: _ }, null);
+                responseReceiver.finish({ error: _ }, null);
+                return _;
             };
             const responseReceiver = getResponseReceiver((error, result) => {
                 if (result) {
@@ -150,20 +154,21 @@ exports.AwsCfnWait = {
             });
             console.log('event', JSON.stringify(event));
             console.log('context', JSON.stringify(context));
-            CustomResource.create(event, context)
-                .then((cr) => {
-                if (!event.WaitProperties) {
-                    cr.customResource()
-                        .then((requestMethods) => requestMethods[event.RequestType.toLowerCase()])
-                        .then((requestMethod) => requestMethod()
-                        .then(getResultHandler(responseReceiver, cr))
-                        .catch(getErrorHandler(responseReceiver)));
-                }
-                else {
-                    getResultHandler(responseReceiver, cr)(event.WaitProperties.responseData);
-                }
-            });
-        };
-        init(typeof event === 'string' ? JSON.parse(event) : event);
+            const cr = yield CustomResource.create(event, context);
+            const resultHandler = getResultHandler(responseReceiver, cr);
+            const errorHandler = getErrorHandler(responseReceiver);
+            if (!event.WaitProperties) {
+                return cr.customResource()
+                    .then(requestMethods => requestMethods[event.RequestType.toLowerCase()])
+                    .then(requestMethod => requestMethod())
+                    .then(resultHandler)
+                    .catch(errorHandler);
+            }
+            else {
+                resultHandler(event.WaitProperties.responseData);
+                return Promise.resolve(event.WaitProperties.responseData);
+            }
+        });
+        return init(typeof event === 'string' ? JSON.parse(event) : event);
     }
 };
